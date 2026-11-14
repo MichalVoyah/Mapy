@@ -48,6 +48,7 @@ PBF, OUT = os.path.join(PRAC, "pbf"), os.path.join(PRAC, "out")
 LOG, SOUHRN = os.path.join(PRAC, "evropa.log"), os.path.join(PRAC, "souhrn.tsv")
 # Mimo Evropskou unii a okolí, kam se autem reálně nejezdí, nebo převážně v Asii (velké zdroje).
 BEZ_VYCHOZI = "by,ru,ua,tr,ge"
+STROP_STAVBY_S = 2700
 
 
 def log(m):
@@ -151,8 +152,14 @@ def stahni(id_, url, b):
         md5_ok = r.read().decode().split()[0]
     tmp = cil + ".part"
     h = hashlib.md5()
+    # ⭐ 14. 11. 2026 (cloud: 2 díly visely hodiny): strop doby stažení — pomalé/zaseklé spojení
+    #    skončí TimeoutError a `s_opakovanim` ho zkusí znovu (nové spojení).
+    strop = 300 + b / 0.5e6
+    t0 = time.time()
     with http(url) as r, open(tmp, "wb") as f:
         while True:
+            if time.time() - t0 > strop:
+                raise TimeoutError("stahování %s přes %.0f s (%.0f MB z %.0f)" % (id_, strop, f.tell() / 1e6, b / 1e6))
             k = r.read(1 << 20)
             if not k:
                 break
@@ -172,7 +179,15 @@ def postav(id_, kod, pbf):
     t0 = time.time()
     vystup = os.path.join(OUT, bezpecne(id_) + ".log")
     with open(vystup, "w", encoding="utf-8") as f:
-        e = subprocess.call(["/usr/bin/time", "-v", "python3", STAV, pbf, tmp, kod], stdout=f, stderr=subprocess.STDOUT)
+        # ⭐ strop stavby jednoho packu (největší zdroj ~1 GB = ~10 min) — zaseklá stavba nesmí držet celý díl
+        pr = subprocess.Popen(["/usr/bin/time", "-v", "python3", STAV, pbf, tmp, kod], stdout=f,
+                              stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            e = pr.wait(timeout=STROP_STAVBY_S)
+        except subprocess.TimeoutExpired:
+            os.killpg(pr.pid, 9)
+            pr.wait()
+            raise RuntimeError("stavba %s přes %d s — zabita" % (id_, STROP_STAVBY_S))
     txt = open(vystup, encoding="utf-8", errors="replace").read()
     m = re.search(r"Maximum resident set size \(kbytes\): (\d+)", txt)
     ram = int(m.group(1)) // 1024 if m else -1
