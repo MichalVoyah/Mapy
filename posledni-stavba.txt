@@ -1,3 +1,3 @@
-Poslední stavba map: 2026-11-14 18:55 UTC
-Vydání: mapy-20261114-2
-Výsledek: plán=success stavba=cancelled publikace=cancelled
+Poslední stavba map: 2026-11-14 21:11 UTC
+Vydání: mapy-20261114-4
+Výsledek: plán=success stavba=success publikace=failure
