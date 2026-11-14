@@ -247,6 +247,8 @@ def main():
     a.add_argument("--dil", default="", help="(cloud) jen díl K/N plánu")
     a.add_argument("--zip-do", default="", help="(cloud) každý pack zabalit do této složky + manifest")
     a.add_argument("--uklid", action="store_true", help="(cloud) po zabalení smazat zdroj i rozbalený pack")
+    a.add_argument("--ids", default="", help="(cloud dohánění) jen tato id packů (čárkou, i s __)")
+    a.add_argument("--dil-jmeno", default="", help="(cloud) jméno dílu v manifest-<jméno>.tsv")
     v = a.parse_args()
     os.makedirs(PBF, exist_ok=True)
     os.makedirs(OUT, exist_ok=True)
@@ -267,6 +269,11 @@ def main():
     if v.dil:
         k, n = (int(x) for x in v.dil.split("/"))
         plan, dil = rozdel(plan, k, n), str(k)
+    if v.ids:
+        chci = {x.strip() for x in v.ids.split(",") if x.strip()}
+        plan = [x for x in plan if bezpecne(x[0]) in chci or x[0] in chci]
+    if v.dil_jmeno:
+        dil = v.dil_jmeno
     if v.zip_do:
         os.makedirs(v.zip_do, exist_ok=True)
     zbyva = [x for x in plan if not os.path.isfile(os.path.join(OUT, bezpecne(x[0]), "hlavicka.json"))]
@@ -286,16 +293,29 @@ def main():
     cesty = [None] * len(zbyva)
     chyby = [None] * len(zbyva)
 
+    # ⭐ 14. 11. 2026: runner bez sítě (cloud díl 2, 2×) — po 3 státech po sobě, které se nestáhly,
+    #    zbytek dílu vzdát hned (jinak hodiny opakování); dožene je job „dohanka" na jiném stroji.
+    MRTVA_SIT_PO = 3
+
     def stahovac():
+        za_sebou = 0
         for i, (id_, _, url, b) in enumerate(zbyva):
             if i > 1:
                 hotovo[i - 2].wait()          # stahuje se stát i, zatímco se staví i−1 — nejvýš jeden napřed
+            if za_sebou >= MRTVA_SIT_PO:
+                chyby[i] = "přeskočeno — %d státy po sobě se nestáhly (síť runneru?)" % za_sebou
+                dl_hotovo[i].set()
+                continue
             try:
                 t = time.time()
                 cesty[i] = s_opakovanim(lambda: stahni(id_, url, b), id_)
                 log("staženo %-34s %7.0f MB za %.0f s" % (id_, b / 1e6, time.time() - t))
+                za_sebou = 0
             except Exception as e:      # noqa: BLE001 — chyba jednoho státu nesmí zastavit ostatní
                 chyby[i] = str(e)
+                za_sebou += 1
+                if za_sebou == MRTVA_SIT_PO:
+                    log("  ⛔ %d státy po sobě se nestáhly — zbytek dílu vzdávám (dožene dohanka)" % za_sebou)
             dl_hotovo[i].set()
 
     dl_hotovo = [threading.Event() for _ in zbyva]
