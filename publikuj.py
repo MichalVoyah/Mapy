@@ -96,8 +96,10 @@ def main():
                 f.write("Chybí (vozy si nechají minulou verzi): %s\n\n" % ", ".join(chybi))
             if vyrazene:
                 f.write("Vyřazeno kvůli poklesu úseků: %s\n\n" % "; ".join(vyrazene))
-            if chyby:
-                f.write("Chyby stavby: %s\n" % ", ".join(chyby))
+            # chyby-*.txt hlásí i státy, které pak dohnal job dohanka — vypsat jen počet dohnaných
+            dohnano = sorted(set(chyby) & set(radky))
+            if dohnano:
+                f.write("Dohnáno na druhý pokus (výpadek sítě runneru): %d packů.\n" % len(dohnano))
     return 0
 
 
