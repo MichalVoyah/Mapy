@@ -1,0 +1,123 @@
+# ☁️ Měsíční stavba map TSR pro celou Evropu (14. 11. 2026).
+# Geofabrik → stav_pack.py po státech (8 dílů souběžně) → zipy do DRAFT vydání → publikuj.py
+# (pojistky) → vydání se zveřejní jako „latest". Vozy čtou releases/latest/download/manifest.tsv.
+# Selže-li kterýkoli díl, vydání zůstane draft a vozy jedou dál na minulém měsíci.
+name: Mapy TSR
+
+on:
+  schedule:
+    - cron: "0 2 2 * *"        # 2. den v měsíci 02:00 UTC (Geofabrik má extrakty z půlnoci)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mapy
+  cancel-in-progress: false
+
+env:
+  DILU: "8"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      datum: ${{ steps.t.outputs.datum }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: t
+        run: |
+          d=$(date -u +%Y%m%d)
+          echo "datum=$d" >> "$GITHUB_OUTPUT"
+          echo "tag=mapy-$d-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: Plán (jednou pro všechny díly)
+        run: TSR_MAPY_PRAC="$RUNNER_TEMP/prac" python3 evropa.py --suchy --plan-ven plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: plan.json
+      - name: Draft vydání
+        run: gh release create "${{ steps.t.outputs.tag }}" --draft --title "Mapy TSR ${{ steps.t.outputs.datum }}" --notes "Stavba běží."
+
+  stavba:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        dil: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Závislosti
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q time
+          pip install "osmium>=4.0,<5" "numpy>=2,<3"
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+      - name: Stavba dílu ${{ matrix.dil }}
+        run: TSR_MAPY_PRAC="$RUNNER_TEMP/prac" python3 evropa.py --plan plan.json --dil "${{ matrix.dil }}/$DILU" --zip-do dist --uklid
+      - name: Nahrát packy do vydání
+        run: |
+          shopt -s nullglob
+          for z in dist/*.zip; do gh release upload "${{ needs.plan.outputs.tag }}" "$z" --clobber; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dil-${{ matrix.dil }}
+          path: |
+            dist/*.tsv
+            dist/*.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: log-${{ matrix.dil }}
+          path: ${{ runner.temp }}/prac/evropa.log
+
+  publikace:
+    needs: [plan, stavba]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dil-*
+          path: dily
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+      - name: Minulý manifest (pojistka poklesu)
+        run: gh release download --pattern manifest.tsv --output stary.tsv || echo "minulý manifest není"
+      - name: Manifest + pojistky
+        run: |
+          python3 publikuj.py --dily dily --plan plan.json --tag "${{ needs.plan.outputs.tag }}" \
+            --datum "${{ needs.plan.outputs.datum }}" --predchozi stary.tsv --ven manifest.tsv --poznamky notes.md
+      - name: Zveřejnit
+        run: |
+          gh release upload "${{ needs.plan.outputs.tag }}" manifest.tsv --clobber
+          gh release edit "${{ needs.plan.outputs.tag }}" --draft=false --latest --notes-file notes.md
+      - name: Úklid starých vydání (nechat 2 poslední + běžící)
+        run: |
+          gh release list --limit 100 --json tagName,isDraft,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[] | [.tagName, .isDraft] | @tsv' > vydani.tsv
+          n=0
+          while IFS=$'\t' read -r tag draft; do
+            if [ "$tag" = "${{ needs.plan.outputs.tag }}" ]; then n=$((n+1)); continue; fi
+            if [ "$draft" = "true" ]; then gh release delete "$tag" --yes --cleanup-tag; continue; fi
+            n=$((n+1))
+            if [ "$n" -gt 2 ]; then gh release delete "$tag" --yes --cleanup-tag; fi
+          done < vydani.tsv
