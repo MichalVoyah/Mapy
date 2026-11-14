@@ -71,7 +71,9 @@ def bezpecne(id_):
 
 
 # Regiony mimo evropskou pevninu (jiné kontinenty), kam se autem nejede — vynechat.
-VYNECHAT_REGIONY = {"france/guadeloupe", "france/guyane", "france/martinique", "france/mayotte", "france/reunion"}
+# ⚠️ 14. 11. 2026: Geofabrik má id BEZ „france/" — se starým zápisem se zámoří stavělo (Martinik v cloudu).
+VYNECHAT_REGIONY = {"guadeloupe", "guyane", "martinique", "mayotte", "reunion",
+                    "france/guadeloupe", "france/guyane", "france/martinique", "france/mayotte", "france/reunion"}
 
 # Státy, které Geofabrik vede bez ISO 3166-1 kódu, ale autem se přes ně jezdí (13. 11. 2026).
 ISO_NAVIC = {"kosovo": "XK"}
@@ -84,8 +86,10 @@ def iso(p):
 
 def naplanuj(prah_b, jen, bez):
     """Seznam [(id, iso, url, bajtů)]; velké státy rozložené na regiony (rekurzivně)."""
-    with http(INDEX_URL) as r:
-        idx = json.load(r)
+    def index():
+        with http(INDEX_URL) as r:
+            return json.load(r)
+    idx = s_opakovanim(index, "index Geofabriku")
     props = {f["properties"]["id"]: f["properties"] for f in idx["features"]}
     deti = {}
     for p in props.values():
@@ -98,7 +102,7 @@ def naplanuj(prah_b, jen, bez):
             log("  %-34s vynecháno (mimo evropskou pevninu)" % p["id"])
             return
         url = p["urls"]["pbf"]
-        b = velikost(url)
+        b = s_opakovanim(lambda: velikost(url), p["id"])
         sub = deti.get(p["id"], [])
         if b > prah_b and sub:
             log("  %-34s %6.2f GB > práh → %d regionů" % (p["id"], b / 1e9, len(sub)))
@@ -118,6 +122,22 @@ def naplanuj(prah_b, jen, bez):
             continue
         pridej(p, kod)
     return plan, deti
+
+
+def s_opakovanim(f, co, pokusu=6, cekej=15):
+    """Výpadek sítě (cloud 14. 11.: runner 20 s „Network is unreachable" → padl celý díl) → zkusit znovu.
+    md5 / málo místa se neopakuje (RuntimeError)."""
+    for k in range(1, pokusu + 1):
+        try:
+            return f()
+        except RuntimeError:
+            raise
+        except Exception as e:          # noqa: BLE001 — URLError, timeout, reset spojení…
+            if k == pokusu:
+                raise
+            log("  ↻ %s: %s — znovu za %d s (pokus %d/%d)" % (co, e, cekej, k + 1, pokusu))
+            time.sleep(cekej)
+            cekej = min(cekej * 2, 240)
 
 
 def stahni(id_, url, b):
@@ -257,7 +277,7 @@ def main():
                 hotovo[i - 2].wait()          # stahuje se stát i, zatímco se staví i−1 — nejvýš jeden napřed
             try:
                 t = time.time()
-                cesty[i] = stahni(id_, url, b)
+                cesty[i] = s_opakovanim(lambda: stahni(id_, url, b), id_)
                 log("staženo %-34s %7.0f MB za %.0f s" % (id_, b / 1e6, time.time() - t))
             except Exception as e:      # noqa: BLE001 — chyba jednoho státu nesmí zastavit ostatní
                 chyby[i] = str(e)
