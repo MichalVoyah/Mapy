@@ -89,8 +89,55 @@ jobs:
           name: log-${{ matrix.dil }}
           path: ${{ runner.temp }}/prac/evropa.log
 
-  publikace:
+  # ⭐ 14. 11. 2026: runner dílu 2 byl 2× bez sítě („Network is unreachable") → nepovedené státy
+  #    ze všech dílů se postaví znovu na JINÉM stroji, teprve pak publikace.
+  dohanka:
     needs: [plan, stavba]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dil-*
+          path: dily
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+      - id: co
+        name: Co dohnat
+        run: |
+          ids=$(cat dily/*/chyby-*.txt 2>/dev/null | sort -u | paste -sd, -)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "Dohnat: ${ids:-nic}"
+      - name: Závislosti
+        if: steps.co.outputs.ids != ''
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q time
+          pip install "osmium>=4.0,<5" "numpy>=2,<3"
+      - name: Stavba dohnaných
+        if: steps.co.outputs.ids != ''
+        timeout-minutes: 180
+        continue-on-error: true
+        run: TSR_MAPY_PRAC="$RUNNER_TEMP/prac" python3 evropa.py --plan plan.json --ids "${{ steps.co.outputs.ids }}" --dil-jmeno dohanka --zip-do dist --uklid
+      - name: Nahrát dohnané
+        if: steps.co.outputs.ids != ''
+        run: |
+          shopt -s nullglob
+          for z in dist/*.zip; do gh release upload "${{ needs.plan.outputs.tag }}" "$z" --clobber; done
+      - uses: actions/upload-artifact@v4
+        if: steps.co.outputs.ids != ''
+        with:
+          name: dil-dohanka
+          path: dist/manifest-*.tsv
+          if-no-files-found: ignore
+
+  publikace:
+    needs: [plan, stavba, dohanka]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
