@@ -66,9 +66,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: plan
+      # ⭐ 14. 11. 2026: díly 3 a 6 visely hodiny → strop kroku; co se do té doby postavilo, se nahraje
+      #    (continue-on-error), chybějící státy posoudí publikuj.py (vozy si nechají minulou verzi)
       - name: Stavba dílu ${{ matrix.dil }}
+        timeout-minutes: 200
+        continue-on-error: true
         run: TSR_MAPY_PRAC="$RUNNER_TEMP/prac" python3 evropa.py --plan plan.json --dil "${{ matrix.dil }}/$DILU" --zip-do dist --uklid
       - name: Nahrát packy do vydání
+        if: always()
         run: |
           shopt -s nullglob
           for z in dist/*.zip; do gh release upload "${{ needs.plan.outputs.tag }}" "$z" --clobber; done
