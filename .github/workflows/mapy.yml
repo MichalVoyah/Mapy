@@ -169,9 +169,10 @@ jobs:
           n=0
           while IFS=$'\t' read -r tag draft; do
             if [ "$tag" = "${{ needs.plan.outputs.tag }}" ]; then n=$((n+1)); continue; fi
-            if [ "$draft" = "true" ]; then gh release delete "$tag" --yes --cleanup-tag; continue; fi
+            # draft nemá tag (14. 11.: --cleanup-tag → HTTP 422 a červený běh) → bez něj; úklid nikdy neshodí běh
+            if [ "$draft" = "true" ]; then gh release delete "$tag" --yes || echo "draft $tag nesmazán"; continue; fi
             n=$((n+1))
-            if [ "$n" -gt 2 ]; then gh release delete "$tag" --yes --cleanup-tag; fi
+            if [ "$n" -gt 2 ]; then gh release delete "$tag" --yes --cleanup-tag || echo "$tag nesmazán"; fi
           done < vydani.tsv
 
   # ⭐ GitHub u veřejných repozitářů VYPNE naplánované běhy po 60 dnech bez commitu (vydání se nepočítá).
@@ -194,4 +195,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add posledni-stavba.txt
           git commit -m "Stav měsíční stavby ${{ needs.plan.outputs.datum }}" || echo "beze změny"
-          git push
+          # někdo mezitím commitnul (14. 11.: nahrávání přes web během běhu) → dorovnat a zkusit znovu
+          for k in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
